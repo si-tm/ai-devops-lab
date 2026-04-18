@@ -1,0 +1,73 @@
+groups:
+  - name: api_alerts
+    interval: 30s
+    rules:
+      - alert: HighAPIErrorRate
+        expr: |
+          rate(api_http_requests_total{status_code=~"5.."}[2m])
+          / rate(api_http_requests_total[2m]) > 0.1
+        for: 1m
+        labels:
+          severity: warning
+          component: api
+        annotations:
+          summary: "API error rate above 10%"
+          description: "Error rate is {{ humanizePercentage $value }} over the last 2m. Possible causes: chaos injection, downstream failure."
+
+      - alert: HighAPILatency
+        expr: |
+          histogram_quantile(0.95,
+            rate(api_http_request_duration_seconds_bucket{route="/order"}[2m])
+          ) > 2
+        for: 1m
+        labels:
+          severity: warning
+          component: api
+        annotations:
+          summary: "API p95 latency above 2s"
+          description: "p95 latency is {{ $value | humanizeDuration }}. Possible cause: chaos:api_latency_ms is set."
+
+      - alert: QueueDepthHigh
+        expr: worker_queue_depth > 50
+        for: 2m
+        labels:
+          severity: warning
+          component: queue
+        annotations:
+          summary: "Queue depth > 50 messages"
+          description: "Queue has {{ $value }} messages. Worker may be stopped or slow."
+
+      - alert: WorkerErrorRateHigh
+        expr: |
+          rate(worker_processed_total{status="error"}[2m])
+          / rate(worker_processed_total[2m]) > 0.2
+        for: 1m
+        labels:
+          severity: critical
+          component: worker
+        annotations:
+          summary: "Worker error rate above 20%"
+          description: "Worker failure rate is {{ humanizePercentage $value }}. Possible cause: chaos:worker_failure_rate_pct or DB issues."
+
+      - alert: DBQuerySlow
+        expr: |
+          histogram_quantile(0.95,
+            rate(worker_db_query_duration_seconds_bucket[2m])
+          ) > 1
+        for: 1m
+        labels:
+          severity: warning
+          component: database
+        annotations:
+          summary: "DB p95 query time > 1s"
+          description: "DB p95 query duration is {{ $value | humanizeDuration }}. Possible cause: chaos:db_lock_duration_ms is set."
+
+      - alert: ChaosScenarioActive
+        expr: api_chaos_active == 1 or worker_chaos_active == 1
+        for: 0m
+        labels:
+          severity: info
+          component: chaos
+        annotations:
+          summary: "Chaos scenario is active"
+          description: "Chaos scenario '{{ $labels.scenario }}' is currently enabled."
