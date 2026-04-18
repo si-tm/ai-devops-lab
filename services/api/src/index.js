@@ -3,6 +3,7 @@
 // Must be required FIRST before any other imports for auto-instrumentation
 require('./tracing');
 
+const path    = require('path');
 const express = require('express');
 const { v4: uuidv4 } = require('uuid');
 const Redis = require('ioredis');
@@ -21,6 +22,11 @@ const app = express();
 app.use(express.json());
 
 // ─────────────────────────────────────────
+// Static dashboard
+// ─────────────────────────────────────────
+app.use(express.static(path.join(__dirname, '../public')));
+
+// ─────────────────────────────────────────
 // Redis connection
 // ─────────────────────────────────────────
 const redis = new Redis(process.env.REDIS_URL || 'redis://localhost:6379', {
@@ -30,6 +36,35 @@ const redis = new Redis(process.env.REDIS_URL || 'redis://localhost:6379', {
 
 redis.on('connect', () => logger.info('Redis connected'));
 redis.on('error', (err) => logger.error('Redis error', { error: err.message, cause: 'redis_connection_failure' }));
+
+// ─────────────────────────────────────────
+// SSE — Live event stream for dashboard
+// ─────────────────────────────────────────
+const sseClients = new Set();
+
+function emitEvent(type, payload) {
+  if (sseClients.size === 0) return;
+  const data = JSON.stringify({ type, ...payload, timestamp: new Date().toISOString() });
+  for (const res of sseClients) {
+    res.write(`data: ${data}\n\n`);
+  }
+}
+
+app.get('/events', (req, res) => {
+  res.setHeader('Content-Type',  'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection',    'keep-alive');
+  res.setHeader('X-Accel-Buffering', 'no');
+  res.flushHeaders();
+
+  const heartbeat = setInterval(() => res.write(':ping\n\n'), 20000);
+  sseClients.add(res);
+
+  req.on('close', () => {
+    sseClients.delete(res);
+    clearInterval(heartbeat);
+  });
+});
 
 // ─────────────────────────────────────────
 // Chaos state helpers
@@ -99,6 +134,51 @@ app.get('/health', async (req, res) => {
 });
 
 // ─────────────────────────────────────────
+// GET /status  (dashboard JSON)
+// ─────────────────────────────────────────
+app.get('/status', async (req, res) => {
+  const [redisPing, queueDepth, dlqDepth, rawChaos] = await Promise.all([
+    redis.ping().then(() => 'ok').catch(() => 'error'),
+    redis.llen('orders:queue').catch(() => 0),
+    redis.llen('orders:dlq').catch(() => 0),
+    getChaosState(),
+  ]);
+
+  // Extract counters from prom-client registry
+  const metricsJSON = await register.getMetricsAsJSON();
+  let requestsTotal = 0;
+  let errorsTotal   = 0;
+
+  for (const metric of metricsJSON) {
+    if (metric.name === 'api_http_requests_total') {
+      for (const { labels, value } of metric.values) {
+        requestsTotal += value;
+        if (labels.status_code && labels.status_code.startsWith('5')) {
+          errorsTotal += value;
+        }
+      }
+    }
+  }
+
+  res.json({
+    timestamp: new Date().toISOString(),
+    health: { api: 'ok', redis: redisPing },
+    queue:  { depth: queueDepth, dlq_depth: dlqDepth },
+    chaos: {
+      api_latency_ms:          rawChaos[CHAOS_KEYS.API_LATENCY],
+      error_rate_pct:          rawChaos[CHAOS_KEYS.ERROR_RATE],
+      queue_delay_ms:          rawChaos[CHAOS_KEYS.QUEUE_DELAY],
+      worker_failure_rate_pct: rawChaos[CHAOS_KEYS.WORKER_FAILURE_RATE],
+      db_lock_duration_ms:     rawChaos[CHAOS_KEYS.DB_LOCK_DURATION],
+    },
+    counters: {
+      requests_total: requestsTotal,
+      errors_total:   errorsTotal,
+    },
+  });
+});
+
+// ─────────────────────────────────────────
 // POST /order
 // ─────────────────────────────────────────
 app.post('/order', async (req, res) => {
@@ -129,6 +209,7 @@ app.post('/order', async (req, res) => {
         span.setAttribute('chaos.type', 'error_rate');
         logger.error('Chaos error injected', { ...logCtx, chaos_type: 'error_rate', error_rate_pct: errorRate });
         queuePublishTotal.inc({ status: 'chaos_error' });
+        emitEvent('order', { status: 'error', orderId, productId: req.body.product_id, quantity: req.body.quantity, cause: 'chaos_error_injection' });
         return res.status(500).json({
           error: 'Internal Server Error',
           cause: 'chaos_error_injection',
@@ -173,6 +254,8 @@ app.post('/order', async (req, res) => {
       span.setStatus({ code: SpanStatusCode.OK });
       logger.info('Order queued successfully', { ...logCtx, product_id: order.product_id, quantity: order.quantity });
 
+      emitEvent('order', { status: 'queued', orderId, productId: order.product_id, quantity: order.quantity });
+
       return res.status(202).json({
         status: 'queued',
         orderId,
@@ -183,6 +266,7 @@ app.post('/order', async (req, res) => {
       span.setStatus({ code: SpanStatusCode.ERROR, message: err.message });
       queuePublishTotal.inc({ status: 'error' });
       logger.error('Failed to queue order', { ...logCtx, error: err.message, cause: 'queue_publish_failed', stack: err.stack });
+      emitEvent('error', { message: 'Failed to queue order', cause: 'queue_publish_failed', orderId });
       return res.status(500).json({
         error: 'Failed to queue order',
         cause: 'queue_publish_failed',
@@ -232,6 +316,7 @@ app.post('/chaos/set', async (req, res) => {
 
   await Promise.all(ops);
   logger.warn('Chaos state updated', { chaos_config: req.body });
+  emitEvent('chaos', { message: `Chaos updated: ${JSON.stringify(req.body)}` });
   const current = await getChaosState();
   res.json({ status: 'ok', applied: req.body, current });
 });
@@ -239,6 +324,7 @@ app.post('/chaos/set', async (req, res) => {
 app.post('/chaos/reset', async (req, res) => {
   await redis.del(...Object.values(CHAOS_KEYS));
   logger.info('All chaos scenarios disabled');
+  emitEvent('chaos', { message: 'All chaos scenarios disabled' });
   res.json({ status: 'ok', message: 'All chaos scenarios disabled' });
 });
 
@@ -255,7 +341,7 @@ app.get('/metrics', async (req, res) => {
 // ─────────────────────────────────────────
 const PORT = parseInt(process.env.PORT || '3000', 10);
 app.listen(PORT, () => {
-  logger.info('API server started', { port: PORT, endpoints: ['/health', '/order', '/chaos', '/metrics'] });
+  logger.info('API server started', { port: PORT, endpoints: ['/health', '/order', '/chaos', '/metrics', '/status', '/events'] });
 });
 
 process.on('SIGTERM', async () => {

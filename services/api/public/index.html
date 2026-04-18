@@ -1,0 +1,709 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AI DevOps Lab</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<style>
+  :root {
+    --bg:       #090e1a;
+    --surface:  #111827;
+    --border:   #1e2d40;
+    --muted:    #374151;
+    --text:     #e2e8f0;
+    --dim:      #64748b;
+    --green:    #22c55e;
+    --yellow:   #f59e0b;
+    --red:      #ef4444;
+    --blue:     #3b82f6;
+    --purple:   #8b5cf6;
+    --mono:     'JetBrains Mono', 'Fira Code', monospace;
+  }
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: system-ui, -apple-system, sans-serif;
+    font-size: 13px;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  /* ── Header ─────────────────────────────────────────── */
+  header {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 10px 20px;
+    border-bottom: 1px solid var(--border);
+    background: var(--surface);
+    flex-shrink: 0;
+  }
+  header h1 {
+    font-size: 15px;
+    font-weight: 600;
+    letter-spacing: .02em;
+    color: var(--text);
+  }
+  header h1 span { color: var(--purple); }
+  .status-pills { display: flex; gap: 8px; align-items: center; }
+  .pill {
+    display: flex; align-items: center; gap: 5px;
+    padding: 3px 10px;
+    border-radius: 20px;
+    border: 1px solid var(--border);
+    background: #0f172a;
+    font-family: var(--mono);
+    font-size: 11px;
+    font-weight: 500;
+    transition: border-color .2s;
+  }
+  .dot {
+    width: 7px; height: 7px;
+    border-radius: 50%;
+    background: var(--muted);
+    transition: background .3s;
+  }
+  .dot.ok     { background: var(--green);  box-shadow: 0 0 6px var(--green); }
+  .dot.warn   { background: var(--yellow); box-shadow: 0 0 6px var(--yellow); }
+  .dot.error  { background: var(--red);    box-shadow: 0 0 6px var(--red); }
+  .header-right { margin-left: auto; display: flex; align-items: center; gap: 12px; }
+  #last-update { font-size: 11px; color: var(--dim); font-family: var(--mono); }
+  .btn-reset {
+    padding: 4px 12px; border-radius: 6px; border: 1px solid #7f1d1d;
+    background: #1c0a0a; color: #fca5a5; cursor: pointer; font-size: 11px;
+    transition: background .15s;
+  }
+  .btn-reset:hover { background: #2d0f0f; }
+
+  /* ── Layout ─────────────────────────────────────────── */
+  main {
+    display: grid;
+    grid-template-columns: 240px 1fr 280px;
+    gap: 0;
+    flex: 1;
+    overflow: hidden;
+  }
+  .panel {
+    border-right: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+  .panel:last-child { border-right: none; }
+  .panel-header {
+    padding: 10px 14px;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: .1em;
+    text-transform: uppercase;
+    color: var(--dim);
+    border-bottom: 1px solid var(--border);
+    background: #0d1320;
+    flex-shrink: 0;
+  }
+  .panel-body {
+    padding: 14px;
+    overflow-y: auto;
+    flex: 1;
+  }
+
+  /* ── Chaos Panel ─────────────────────────────────────── */
+  .chaos-item { margin-bottom: 18px; }
+  .chaos-label {
+    display: flex; justify-content: space-between; align-items: center;
+    margin-bottom: 6px;
+  }
+  .chaos-name { font-size: 12px; color: var(--text); }
+  .chaos-value {
+    font-family: var(--mono);
+    font-size: 11px;
+    padding: 1px 7px;
+    border-radius: 4px;
+    background: var(--muted);
+    color: var(--text);
+    min-width: 52px;
+    text-align: right;
+    transition: background .2s;
+  }
+  .chaos-value.active { background: #7c2d12; color: #fed7aa; }
+  input[type=range] {
+    width: 100%; height: 4px;
+    -webkit-appearance: none; appearance: none;
+    background: var(--muted); border-radius: 2px; cursor: pointer;
+    outline: none;
+  }
+  input[type=range]::-webkit-slider-thumb {
+    -webkit-appearance: none; appearance: none;
+    width: 14px; height: 14px; border-radius: 50%;
+    background: var(--purple); cursor: pointer;
+    transition: background .15s;
+  }
+  input[type=range]:hover::-webkit-slider-thumb { background: #a78bfa; }
+  .chaos-active input[type=range] { background: #7c2d12; }
+  .chaos-active input[type=range]::-webkit-slider-thumb { background: var(--red); }
+
+  .preset-section { margin-top: 8px; }
+  .preset-label {
+    font-size: 10px; letter-spacing: .08em; text-transform: uppercase;
+    color: var(--dim); margin-bottom: 8px;
+  }
+  .preset-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+  .btn-preset {
+    padding: 6px 4px; border-radius: 6px; border: 1px solid var(--border);
+    background: #0f172a; color: var(--dim); cursor: pointer; font-size: 10px;
+    text-align: center; transition: all .15s;
+  }
+  .btn-preset:hover { border-color: var(--purple); color: var(--text); background: #1e1433; }
+
+  /* ── Metrics Panel ───────────────────────────────────── */
+  .metrics-grid { display: flex; flex-direction: column; gap: 0; height: 100%; }
+  .chart-block {
+    flex: 1;
+    padding: 12px 14px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+  }
+  .chart-block:last-child { border-bottom: none; }
+  .chart-title {
+    font-size: 10px; text-transform: uppercase; letter-spacing: .08em;
+    color: var(--dim); margin-bottom: 4px;
+    display: flex; justify-content: space-between; align-items: center;
+  }
+  .chart-value { font-family: var(--mono); font-size: 16px; font-weight: 600; color: var(--text); }
+  .chart-sub   { font-size: 10px; color: var(--dim); }
+  .chart-canvas-wrap { flex: 1; min-height: 0; position: relative; }
+
+  /* ── Activity Panel ──────────────────────────────────── */
+  .order-form { padding: 14px; border-bottom: 1px solid var(--border); }
+  .form-row { display: flex; gap: 6px; margin-bottom: 8px; }
+  select, input[type=number] {
+    flex: 1; padding: 6px 8px; border-radius: 6px;
+    border: 1px solid var(--border); background: #0f172a;
+    color: var(--text); font-size: 12px; outline: none;
+  }
+  select:focus, input[type=number]:focus { border-color: var(--purple); }
+  .btn-send {
+    width: 100%; padding: 7px; border-radius: 6px;
+    border: none; background: var(--purple); color: white;
+    cursor: pointer; font-size: 12px; font-weight: 600;
+    transition: background .15s;
+  }
+  .btn-send:hover { background: #7c3aed; }
+  .btn-send:active { background: #6d28d9; }
+  .send-status { font-size: 11px; text-align: center; margin-top: 6px; min-height: 16px; }
+
+  .log-section { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+  .log-header {
+    padding: 8px 14px;
+    font-size: 10px; letter-spacing: .08em; text-transform: uppercase;
+    color: var(--dim); border-bottom: 1px solid var(--border);
+    background: #0d1320; display: flex; justify-content: space-between;
+    align-items: center; flex-shrink: 0;
+  }
+  .log-count {
+    background: var(--muted); color: var(--dim);
+    padding: 1px 6px; border-radius: 10px; font-size: 10px;
+    font-family: var(--mono);
+  }
+  #log-stream {
+    flex: 1; overflow-y: auto; padding: 8px 0;
+    font-family: var(--mono); font-size: 11px;
+  }
+  .log-entry {
+    display: flex; gap: 8px; padding: 3px 14px;
+    border-bottom: 1px solid transparent;
+    transition: background .1s;
+    line-height: 1.6;
+  }
+  .log-entry:hover { background: #0f172a; }
+  .log-time  { color: var(--dim); flex-shrink: 0; }
+  .log-badge {
+    flex-shrink: 0; padding: 0 5px; border-radius: 3px;
+    font-size: 10px; font-weight: 700; line-height: 1.8;
+  }
+  .badge-ok     { background: #14532d; color: #86efac; }
+  .badge-error  { background: #7f1d1d; color: #fca5a5; }
+  .badge-warn   { background: #451a03; color: #fcd34d; }
+  .badge-chaos  { background: #2e1065; color: #c4b5fd; }
+  .log-msg  { color: var(--text); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .log-detail { color: var(--dim); font-size: 10px; }
+
+  /* Scrollbar */
+  ::-webkit-scrollbar { width: 4px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--muted); border-radius: 2px; }
+</style>
+</head>
+<body>
+
+<!-- ── Header ─────────────────────────────────────────────── -->
+<header>
+  <h1>🤖 AI DevOps <span>Lab</span></h1>
+  <div class="status-pills">
+    <div class="pill"><div class="dot" id="dot-api"></div><span id="lbl-api">API</span></div>
+    <div class="pill"><div class="dot" id="dot-redis"></div><span id="lbl-redis">Redis</span></div>
+    <div class="pill"><div class="dot" id="dot-queue"></div><span id="lbl-queue">Queue: –</span></div>
+    <div class="pill"><div class="dot" id="dot-dlq"></div><span id="lbl-dlq">DLQ: –</span></div>
+  </div>
+  <div class="header-right">
+    <span id="last-update">–</span>
+    <button class="btn-reset" onclick="resetChaos()">⚡ Reset Chaos</button>
+  </div>
+</header>
+
+<!-- ── Main ───────────────────────────────────────────────── -->
+<main>
+
+  <!-- ── 1. Chaos Panel ──────────────────────────────────── -->
+  <div class="panel">
+    <div class="panel-header">💥 Chaos Control</div>
+    <div class="panel-body">
+
+      <div class="chaos-item" id="ci-latency">
+        <div class="chaos-label">
+          <span class="chaos-name">API Latency</span>
+          <span class="chaos-value" id="val-latency">0 ms</span>
+        </div>
+        <input type="range" id="sl-latency" min="0" max="5000" step="100" value="0"
+          oninput="updateChaosLabel('latency',this.value,'ms')"
+          onchange="applyChaos('api_latency_ms',this.value)">
+      </div>
+
+      <div class="chaos-item" id="ci-errors">
+        <div class="chaos-label">
+          <span class="chaos-name">Error Rate</span>
+          <span class="chaos-value" id="val-errors">0 %</span>
+        </div>
+        <input type="range" id="sl-errors" min="0" max="100" step="5" value="0"
+          oninput="updateChaosLabel('errors',this.value,'%')"
+          onchange="applyChaos('error_rate_pct',this.value)">
+      </div>
+
+      <div class="chaos-item" id="ci-qdelay">
+        <div class="chaos-label">
+          <span class="chaos-name">Queue Delay</span>
+          <span class="chaos-value" id="val-qdelay">0 ms</span>
+        </div>
+        <input type="range" id="sl-qdelay" min="0" max="5000" step="100" value="0"
+          oninput="updateChaosLabel('qdelay',this.value,'ms')"
+          onchange="applyChaos('queue_delay_ms',this.value)">
+      </div>
+
+      <div class="chaos-item" id="ci-wfail">
+        <div class="chaos-label">
+          <span class="chaos-name">Worker Failure</span>
+          <span class="chaos-value" id="val-wfail">0 %</span>
+        </div>
+        <input type="range" id="sl-wfail" min="0" max="100" step="5" value="0"
+          oninput="updateChaosLabel('wfail',this.value,'%')"
+          onchange="applyChaos('worker_failure_rate_pct',this.value)">
+      </div>
+
+      <div class="chaos-item" id="ci-dblock">
+        <div class="chaos-label">
+          <span class="chaos-name">DB Lock</span>
+          <span class="chaos-value" id="val-dblock">0 ms</span>
+        </div>
+        <input type="range" id="sl-dblock" min="0" max="10000" step="500" value="0"
+          oninput="updateChaosLabel('dblock',this.value,'ms')"
+          onchange="applyChaos('db_lock_duration_ms',this.value)">
+      </div>
+
+      <div class="preset-section">
+        <div class="preset-label">Presets</div>
+        <div class="preset-grid">
+          <button class="btn-preset" onclick="applyPreset('latency')">🐢 Latency</button>
+          <button class="btn-preset" onclick="applyPreset('errors')">💣 Errors</button>
+          <button class="btn-preset" onclick="applyPreset('worker')">🔥 Worker</button>
+          <button class="btn-preset" onclick="applyPreset('db')">🔒 DB Lock</button>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ── 2. Metrics Panel ─────────────────────────────────── -->
+  <div class="panel">
+    <div class="panel-header">📊 Metrics (last 90s)</div>
+    <div class="metrics-grid">
+
+      <div class="chart-block">
+        <div class="chart-title">
+          <span>Requests / min</span>
+          <div>
+            <span class="chart-value" id="mv-rps">–</span>
+            <span class="chart-sub"> req/min</span>
+          </div>
+        </div>
+        <div class="chart-canvas-wrap">
+          <canvas id="chart-rps"></canvas>
+        </div>
+      </div>
+
+      <div class="chart-block">
+        <div class="chart-title">
+          <span>Error Rate</span>
+          <div>
+            <span class="chart-value" id="mv-err">–</span>
+            <span class="chart-sub"> %</span>
+          </div>
+        </div>
+        <div class="chart-canvas-wrap">
+          <canvas id="chart-err"></canvas>
+        </div>
+      </div>
+
+      <div class="chart-block">
+        <div class="chart-title">
+          <span>Queue Depth</span>
+          <div>
+            <span class="chart-value" id="mv-queue">–</span>
+            <span class="chart-sub"> msgs</span>
+          </div>
+        </div>
+        <div class="chart-canvas-wrap">
+          <canvas id="chart-queue"></canvas>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ── 3. Activity Panel ─────────────────────────────────── -->
+  <div class="panel">
+    <div class="panel-header">📤 Send Order</div>
+    <div class="order-form">
+      <div class="form-row">
+        <select id="product">
+          <option>prod-A</option>
+          <option>prod-B</option>
+          <option>prod-C</option>
+          <option>prod-D</option>
+          <option>prod-E</option>
+        </select>
+        <input type="number" id="qty" value="1" min="1" max="99" style="max-width:64px">
+      </div>
+      <button class="btn-send" onclick="sendOrder()">Send Order →</button>
+      <div class="send-status" id="send-status"></div>
+    </div>
+
+    <div class="log-section">
+      <div class="log-header">
+        Live Activity
+        <span class="log-count" id="log-count">0</span>
+      </div>
+      <div id="log-stream"></div>
+    </div>
+  </div>
+
+</main>
+
+<script>
+// ─────────────────────────────────────────────────────────────
+// State
+// ─────────────────────────────────────────────────────────────
+const MAX_POINTS = 30; // 30 × 3s = 90s window
+const POLL_MS    = 3000;
+
+const state = {
+  prev: null,
+  logCount: 0,
+};
+
+// ─────────────────────────────────────────────────────────────
+// Charts
+// ─────────────────────────────────────────────────────────────
+const chartCfg = (color) => ({
+  type: 'line',
+  data: {
+    labels: Array(MAX_POINTS).fill(''),
+    datasets: [{
+      data: Array(MAX_POINTS).fill(null),
+      borderColor: color,
+      borderWidth: 1.5,
+      pointRadius: 0,
+      fill: true,
+      backgroundColor: color + '18',
+      tension: 0.3,
+    }]
+  },
+  options: {
+    animation: false,
+    responsive: true,
+    maintainAspectRatio: false,
+    scales: {
+      x: { display: false },
+      y: {
+        display: true,
+        min: 0,
+        grid: { color: '#1e2d40' },
+        ticks: { color: '#64748b', font: { size: 10 }, maxTicksLimit: 4 },
+      }
+    },
+    plugins: { legend: { display: false }, tooltip: { enabled: false } },
+  }
+});
+
+let charts = {};
+
+function initCharts() {
+  charts.rps   = new Chart(document.getElementById('chart-rps'),   chartCfg('#8b5cf6'));
+  charts.err   = new Chart(document.getElementById('chart-err'),   chartCfg('#ef4444'));
+  charts.queue = new Chart(document.getElementById('chart-queue'), chartCfg('#f59e0b'));
+}
+
+function pushPoint(chart, value) {
+  chart.data.datasets[0].data.push(value);
+  chart.data.datasets[0].data.shift();
+  chart.update('none');
+}
+
+// ─────────────────────────────────────────────────────────────
+// Status polling
+// ─────────────────────────────────────────────────────────────
+async function pollStatus() {
+  try {
+    const res  = await fetch('/status');
+    const data = await res.json();
+    updateHeader(data);
+    updateMetrics(data);
+    syncChaosSliders(data.chaos);
+    state.prev = data;
+    document.getElementById('last-update').textContent =
+      new Date().toLocaleTimeString('ja-JP');
+  } catch (e) {
+    setDot('api', 'error');
+  }
+}
+
+function updateHeader(data) {
+  setDot('api',   data.health.api   === 'ok' ? 'ok' : 'error');
+  setDot('redis', data.health.redis === 'ok' ? 'ok' : 'error');
+
+  const q = data.queue.depth;
+  document.getElementById('lbl-queue').textContent = `Queue: ${q}`;
+  setDot('queue', q === 0 ? 'ok' : q < 20 ? 'warn' : 'error');
+
+  const d = data.queue.dlq_depth;
+  document.getElementById('lbl-dlq').textContent = `DLQ: ${d}`;
+  setDot('dlq', d === 0 ? 'ok' : 'error');
+}
+
+function updateMetrics(data) {
+  const c = data.counters;
+  const p = state.prev?.counters;
+
+  // Requests per minute (delta over 3s → extrapolate to /min)
+  let rpm = null, errPct = null;
+  if (p) {
+    const totalDelta = (c.requests_total - p.requests_total);
+    const errDelta   = (c.errors_total   - p.errors_total);
+    rpm    = Math.round(totalDelta * (60 / (POLL_MS / 1000)));
+    errPct = totalDelta > 0 ? Math.round((errDelta / totalDelta) * 100) : 0;
+  }
+
+  const q = data.queue.depth;
+  document.getElementById('mv-rps').textContent   = rpm   !== null ? rpm   : '–';
+  document.getElementById('mv-err').textContent   = errPct !== null ? errPct : '–';
+  document.getElementById('mv-queue').textContent = q;
+
+  // Color error rate value
+  const errEl = document.getElementById('mv-err');
+  errEl.style.color = errPct > 20 ? 'var(--red)' : errPct > 0 ? 'var(--yellow)' : 'var(--text)';
+
+  pushPoint(charts.rps,   rpm   ?? 0);
+  pushPoint(charts.err,   errPct ?? 0);
+  pushPoint(charts.queue, q);
+}
+
+function setDot(id, status) {
+  const el = document.getElementById(`dot-${id}`);
+  el.className = `dot ${status}`;
+}
+
+// ─────────────────────────────────────────────────────────────
+// Chaos controls
+// ─────────────────────────────────────────────────────────────
+const chaosMap = {
+  latency: { slider: 'sl-latency', val: 'val-latency', unit: 'ms', key: 'api_latency_ms',          ci: 'ci-latency' },
+  errors:  { slider: 'sl-errors',  val: 'val-errors',  unit: '%',  key: 'error_rate_pct',           ci: 'ci-errors'  },
+  qdelay:  { slider: 'sl-qdelay',  val: 'val-qdelay',  unit: 'ms', key: 'queue_delay_ms',           ci: 'ci-qdelay'  },
+  wfail:   { slider: 'sl-wfail',   val: 'val-wfail',   unit: '%',  key: 'worker_failure_rate_pct',  ci: 'ci-wfail'   },
+  dblock:  { slider: 'sl-dblock',  val: 'val-dblock',  unit: 'ms', key: 'db_lock_duration_ms',      ci: 'ci-dblock'  },
+};
+
+function updateChaosLabel(name, value, unit) {
+  const m = chaosMap[name];
+  const el = document.getElementById(m.val);
+  el.textContent = `${value} ${unit}`;
+  el.classList.toggle('active', Number(value) > 0);
+  document.getElementById(m.ci).classList.toggle('chaos-active', Number(value) > 0);
+}
+
+async function applyChaos(key, value) {
+  await fetch('/chaos/set', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ [key]: Number(value) }),
+  });
+}
+
+async function resetChaos() {
+  await fetch('/chaos/reset', { method: 'POST' });
+  for (const [name, m] of Object.entries(chaosMap)) {
+    document.getElementById(m.slider).value = 0;
+    updateChaosLabel(name, 0, m.unit);
+  }
+  addLog('chaos', 'All chaos scenarios disabled', '');
+}
+
+function syncChaosSliders(chaos) {
+  if (!chaos) return;
+  const sync = (name, val) => {
+    const m = chaosMap[name];
+    const slider = document.getElementById(m.slider);
+    if (document.activeElement !== slider) {
+      slider.value = val;
+      updateChaosLabel(name, val, m.unit);
+    }
+  };
+  sync('latency', chaos.api_latency_ms);
+  sync('errors',  chaos.error_rate_pct);
+  sync('qdelay',  chaos.queue_delay_ms);
+  sync('wfail',   chaos.worker_failure_rate_pct);
+  sync('dblock',  chaos.db_lock_duration_ms);
+}
+
+const presets = {
+  latency: { api_latency_ms: 2000 },
+  errors:  { error_rate_pct: 40 },
+  worker:  { worker_failure_rate_pct: 60 },
+  db:      { db_lock_duration_ms: 5000 },
+};
+
+async function applyPreset(name) {
+  const p = presets[name];
+  await fetch('/chaos/reset', { method: 'POST' });
+  await fetch('/chaos/set', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(p),
+  });
+  addLog('chaos', `Preset: ${name}`, JSON.stringify(p));
+}
+
+// ─────────────────────────────────────────────────────────────
+// Send Order
+// ─────────────────────────────────────────────────────────────
+async function sendOrder() {
+  const product = document.getElementById('product').value;
+  const qty     = Number(document.getElementById('qty').value);
+  const statusEl = document.getElementById('send-status');
+
+  statusEl.style.color = 'var(--dim)';
+  statusEl.textContent = 'Sending...';
+
+  try {
+    const res  = await fetch('/order', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ product_id: product, quantity: qty }),
+    });
+    const data = await res.json();
+    if (res.ok) {
+      statusEl.style.color = 'var(--green)';
+      statusEl.textContent = `✓ Queued: ${data.orderId?.slice(0,8)}…`;
+    } else {
+      statusEl.style.color = 'var(--red)';
+      statusEl.textContent = `✗ ${data.cause || data.error}`;
+    }
+  } catch (e) {
+    statusEl.style.color = 'var(--red)';
+    statusEl.textContent = `✗ Network error`;
+  }
+
+  setTimeout(() => { statusEl.textContent = ''; }, 3000);
+}
+
+// ─────────────────────────────────────────────────────────────
+// Live log via SSE
+// ─────────────────────────────────────────────────────────────
+function connectSSE() {
+  const es = new EventSource('/events');
+
+  es.onmessage = (ev) => {
+    try {
+      const d = JSON.parse(ev.data);
+      if (d.type === 'order') {
+        const status  = d.status === 'queued' ? 'ok' : 'error';
+        const detail  = `${d.productId} ×${d.quantity}`;
+        addLog(status, d.status === 'queued' ? 'Order queued' : `Order failed: ${d.cause}`, detail);
+      } else if (d.type === 'chaos') {
+        addLog('chaos', d.message, '');
+      } else if (d.type === 'error') {
+        addLog('error', d.message, d.cause || '');
+      }
+    } catch (_) {}
+  };
+
+  es.onerror = () => {
+    // Retry silently; EventSource auto-reconnects
+  };
+}
+
+const MAX_LOG = 100;
+
+function addLog(type, msg, detail) {
+  const stream = document.getElementById('log-stream');
+  const now    = new Date().toLocaleTimeString('ja-JP', { hour12: false });
+
+  const badgeClass = {
+    ok: 'badge-ok', error: 'badge-error',
+    warn: 'badge-warn', chaos: 'badge-chaos',
+  }[type] || 'badge-warn';
+
+  const label = { ok: 'OK', error: 'ERR', warn: 'WARN', chaos: 'CHAOS' }[type] || type;
+
+  const entry = document.createElement('div');
+  entry.className = 'log-entry';
+  entry.innerHTML = `
+    <span class="log-time">${now}</span>
+    <span class="log-badge ${badgeClass}">${label}</span>
+    <span class="log-msg">${escHtml(msg)}</span>
+    ${detail ? `<span class="log-detail">${escHtml(detail)}</span>` : ''}
+  `;
+
+  stream.insertBefore(entry, stream.firstChild);
+
+  // Trim old entries
+  while (stream.children.length > MAX_LOG) {
+    stream.removeChild(stream.lastChild);
+  }
+
+  state.logCount++;
+  document.getElementById('log-count').textContent = state.logCount;
+}
+
+function escHtml(s) {
+  return String(s)
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+// ─────────────────────────────────────────────────────────────
+// Boot
+// ─────────────────────────────────────────────────────────────
+window.addEventListener('DOMContentLoaded', () => {
+  initCharts();
+  connectSSE();
+  pollStatus();
+  setInterval(pollStatus, POLL_MS);
+});
+</script>
+</body>
+</html>
