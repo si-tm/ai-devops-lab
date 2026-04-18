@@ -137,11 +137,15 @@ app.get('/health', async (req, res) => {
 // GET /status  (dashboard JSON)
 // ─────────────────────────────────────────
 app.get('/status', async (req, res) => {
-  const [redisPing, queueDepth, dlqDepth, rawChaos] = await Promise.all([
+  const workerUrl = `http://worker:${process.env.WORKER_METRICS_PORT || '9091'}/health`;
+  const [redisPing, queueDepth, dlqDepth, rawChaos, workerHealth] = await Promise.all([
     redis.ping().then(() => 'ok').catch(() => 'error'),
     redis.llen('orders:queue').catch(() => 0),
     redis.llen('orders:dlq').catch(() => 0),
     getChaosState(),
+    fetch(workerUrl, { signal: AbortSignal.timeout(2000) })
+      .then(r => r.json())
+      .catch(() => ({ status: 'error', db: 'error', db_rows: 0 })),
   ]);
 
   // Extract counters from prom-client registry
@@ -162,8 +166,14 @@ app.get('/status', async (req, res) => {
 
   res.json({
     timestamp: new Date().toISOString(),
-    health: { api: 'ok', redis: redisPing },
+    health: {
+      api:    'ok',
+      redis:  redisPing,
+      worker: workerHealth.status  || 'error',
+      db:     workerHealth.db      || 'error',
+    },
     queue:  { depth: queueDepth, dlq_depth: dlqDepth },
+    db:     { rows: workerHealth.db_rows || 0 },
     chaos: {
       api_latency_ms:          rawChaos[CHAOS_KEYS.API_LATENCY],
       error_rate_pct:          rawChaos[CHAOS_KEYS.ERROR_RATE],

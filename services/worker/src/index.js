@@ -232,7 +232,20 @@ const metricsServer = http.createServer(async (req, res) => {
     res.end(await register.metrics());
   } else if (req.url === '/health') {
     res.setHeader('Content-Type', 'application/json');
-    res.end(JSON.stringify({ status: 'ok', service: 'worker', timestamp: new Date().toISOString() }));
+    let dbStatus = 'ok';
+    let processedCount = 0;
+    try {
+      const r = await db.query('SELECT COUNT(*) FROM orders');
+      processedCount = parseInt(r.rows[0].count, 10);
+    } catch (err) {
+      dbStatus = 'error';
+    }
+    const overall = dbStatus === 'ok' ? 'ok' : 'degraded';
+    res.end(JSON.stringify({
+      status: overall, service: 'worker',
+      db: dbStatus, db_rows: processedCount,
+      timestamp: new Date().toISOString(),
+    }));
   } else {
     res.statusCode = 404;
     res.end('Not Found');
