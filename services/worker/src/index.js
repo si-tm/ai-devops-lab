@@ -235,10 +235,14 @@ const metricsServer = http.createServer(async (req, res) => {
     let dbStatus = 'ok';
     let processedCount = 0;
     try {
-      const r = await db.query('SELECT COUNT(*) FROM orders');
-      processedCount = parseInt(r.rows[0].count, 10);
+      await db.query('SELECT 1');
+      const r = await db.query(
+        "SELECT reltuples::bigint AS count FROM pg_class WHERE relname = 'orders'"
+      );
+      processedCount = parseInt(r.rows[0]?.count ?? 0, 10);
     } catch (err) {
       dbStatus = 'error';
+      logger.error('DB health check failed', { error: err.message, cause: 'db_health_query_failed' });
     }
     const overall = dbStatus === 'ok' ? 'ok' : 'degraded';
     res.end(JSON.stringify({

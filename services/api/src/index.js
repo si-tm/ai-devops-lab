@@ -143,9 +143,12 @@ app.get('/status', async (req, res) => {
     redis.llen('orders:queue').catch(() => 0),
     redis.llen('orders:dlq').catch(() => 0),
     getChaosState(),
-    fetch(workerUrl, { signal: AbortSignal.timeout(2000) })
+    fetch(workerUrl, { signal: AbortSignal.timeout(5000) })
       .then(r => r.json())
-      .catch(() => ({ status: 'error', db: 'error', db_rows: 0 })),
+      .catch((err) => {
+        logger.warn('Worker health fetch failed', { error: err.message, url: workerUrl });
+        return { status: 'error', db: 'error', db_rows: 0 };
+      }),
   ]);
 
   // Extract counters from prom-client registry
