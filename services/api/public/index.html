@@ -542,7 +542,7 @@ function updateMetrics(data) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// Chaos controls
+// Chaos controls (FIXED)
 // ─────────────────────────────────────────────────────────────
 const chaosMap = {
   latency: { slider: 'sl-latency', val: 'val-latency', unit: 'ms', key: 'api_latency_ms',          ci: 'ci-latency' },
@@ -560,11 +560,23 @@ function updateChaosLabel(name, value, unit) {
   document.getElementById(m.ci).classList.toggle('chaos-active', Number(value) > 0);
 }
 
+// ★ FIX: 全スライダーの現在値をまとめて取得
+function getAllChaosValues() {
+  const values = {};
+  for (const [, m] of Object.entries(chaosMap)) {
+    values[m.key] = Number(document.getElementById(m.slider).value);
+  }
+  return values;
+}
+
+// ★ FIX: 変更された値を含む全状態を送信
 async function applyChaos(key, value) {
+  const chaos = getAllChaosValues();
+  chaos[key] = Number(value);
   await fetch('/chaos/set', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ [key]: Number(value) }),
+    body: JSON.stringify(chaos),
   });
 }
 
@@ -601,16 +613,33 @@ const presets = {
   db:      { db_lock_duration_ms: 5000 },
 };
 
+// ★ FIX: Reset せず、Preset 値を直接セット
 async function applyPreset(name) {
-  await fetch('/chaos/reset', { method: 'POST' });
+  // まず全スライダーを 0 に（UI のみ）
+  for (const [n, m] of Object.entries(chaosMap)) {
+    document.getElementById(m.slider).value = 0;
+    updateChaosLabel(n, 0, m.unit);
+  }
+  // Preset の値をスライダーに反映
+  const preset = presets[name];
+  for (const [key, val] of Object.entries(preset)) {
+    for (const [n, m] of Object.entries(chaosMap)) {
+      if (m.key === key) {
+        document.getElementById(m.slider).value = val;
+        updateChaosLabel(n, val, m.unit);
+      }
+    }
+  }
+  // ★ 全値をまとめて 1 回だけ送信（reset 不要）
+  const chaos = getAllChaosValues();
   await fetch('/chaos/set', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(presets[name]),
+    body: JSON.stringify(chaos),
   });
-  addLog('chaos', `Preset: ${name}`, JSON.stringify(presets[name]));
+  addLog('chaos', `Preset: ${name}`, JSON.stringify(preset));
 }
-
+  
 // ─────────────────────────────────────────────────────────────
 // Send Order
 // ─────────────────────────────────────────────────────────────
