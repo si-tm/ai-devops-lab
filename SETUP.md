@@ -26,6 +26,7 @@
 17. [環境変数一覧](#17-環境変数一覧)
 18. [トラブルシューティング](#18-トラブルシューティング)
 19. [リソース削除手順](#19-リソース削除手順)
+20. [CloudFormation.yaml](#20- CloudFormation)
 
 ---
 
@@ -1388,6 +1389,431 @@ aws ec2 delete-vpc --vpc-id ${VPC_ID}
 echo "全リソース削除完了"
 ```
 
+## 20.CloudFormation.yaml
+
+```yaml
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  ai-devops-lab full stack — API / Worker (Fargate) + ElastiCache Redis + RDS PostgreSQL
+
+# ──────────────────────────────────────────────────────────
+# Parameters
+# ──────────────────────────────────────────────────────────
+Parameters:
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Default: vpc-xxxxxxx
+
+  PublicSubnetA:
+    Type: AWS::EC2::Subnet::Id
+    Default: subnet-xxxxxxx
+
+  PublicSubnetC:
+    Type: AWS::EC2::Subnet::Id
+    Default: subnet-xxxxxxx
+
+  PrivateSubnetA:
+    Type: AWS::EC2::Subnet::Id
+    Default: subnet-xxxxxxx
+
+  PrivateSubnetC:
+    Type: AWS::EC2::Subnet::Id
+    Default: subnet-xxxxxxx
+
+  DBUser:
+    Type: String
+    Default: postgres
+
+  DBPassword:
+    Type: String
+    NoEcho: true
+    MinLength: 8
+
+  DBName:
+    Type: String
+    Default: devopslab
+
+  ApiImage:
+    Type: String
+    Default: 573576813930.dkr.ecr.ap-northeast-1.amazonaws.com/ai-devops-lab/api:latest
+
+  WorkerImage:
+    Type: String
+    Default: 573576813930.dkr.ecr.ap-northeast-1.amazonaws.com/ai-devops-lab/worker:latest
+
+# ──────────────────────────────────────────────────────────
+# Resources
+# ──────────────────────────────────────────────────────────
+Resources:
+
+  # ==================== Security Groups ====================
+  ALBSG:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: ai-devops-lab ALB SG
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: ai-devops-lab-alb-sg
+
+  ECSServiceSG:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: ai-devops-lab ECS tasks SG
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 3000
+          ToPort: 3000
+          SourceSecurityGroupId: !Ref ALBSG
+      Tags:
+        - Key: Name
+          Value: ai-devops-lab-ecs-sg
+
+  # ECS tasks need to talk to each other (worker <-> api metrics, etc.)
+  ECSServiceSGSelfIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref ECSServiceSG
+      IpProtocol: tcp
+      FromPort: 0
+      ToPort: 65535
+      SourceSecurityGroupId: !Ref ECSServiceSG
+
+  RedisSG:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: ai-devops-lab Redis SG
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 6379
+          ToPort: 6379
+          SourceSecurityGroupId: !Ref ECSServiceSG
+      Tags:
+        - Key: Name
+          Value: ai-devops-lab-redis-sg
+
+  RDSSG:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: ai-devops-lab RDS SG
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
+          SourceSecurityGroupId: !Ref ECSServiceSG
+      Tags:
+        - Key: Name
+          Value: ai-devops-lab-rds-sg
+
+  # ==================== ElastiCache (Redis) ====================
+  RedisSubnetGroup:
+    Type: AWS::ElastiCache::SubnetGroup
+    Properties:
+      Description: ai-devops-lab Redis subnet group
+      SubnetIds:
+        - !Ref PrivateSubnetA
+        - !Ref PrivateSubnetC
+
+  RedisCluster:
+    Type: AWS::ElastiCache::CacheCluster
+    Properties:
+      ClusterName: ai-devops-lab-redis
+      Engine: redis
+      CacheNodeType: cache.t3.micro
+      NumCacheNodes: 1
+      CacheSubnetGroupName: !Ref RedisSubnetGroup
+      VpcSecurityGroupIds:
+        - !Ref RedisSG
+      Tags:
+        - Key: Name
+          Value: ai-devops-lab-redis
+
+  # ==================== RDS (PostgreSQL) ====================
+  DBSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: ai-devops-lab DB subnet group
+      SubnetIds:
+        - !Ref PrivateSubnetA
+        - !Ref PrivateSubnetC
+
+  Database:
+    Type: AWS::RDS::DBInstance
+    DeletionPolicy: Delete
+    Properties:
+      DBInstanceIdentifier: ai-devops-lab-db
+      Engine: postgres
+      EngineVersion: "16.6"
+      DBInstanceClass: db.t4g.micro
+      AllocatedStorage: 20
+      StorageType: gp3
+      MasterUsername: !Ref DBUser
+      MasterUserPassword: !Ref DBPassword
+      DBName: !Ref DBName
+      DBSubnetGroupName: !Ref DBSubnetGroup
+      VPCSecurityGroups:
+        - !Ref RDSSG
+      PubliclyAccessible: false
+      MultiAZ: false
+      BackupRetentionPeriod: 0
+      Tags:
+        - Key: Name
+          Value: ai-devops-lab-db
+
+  # ==================== ECS Cluster ====================
+  ECSCluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: ai-devops-lab
+
+  # ==================== IAM ====================
+  TaskExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: ai-devops-lab-task-exec-role
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+
+  # ==================== CloudWatch Logs ====================
+  APILogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /ecs/ai-devops-lab/api
+      RetentionInDays: 7
+
+  WorkerLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /ecs/ai-devops-lab/worker
+      RetentionInDays: 7
+
+  # ==================== Task Definitions ====================
+  APITaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    DependsOn:
+      - RedisCluster
+      - Database
+    Properties:
+      Family: ai-devops-lab-api
+      Cpu: "256"
+      Memory: "512"
+      NetworkMode: awsvpc
+      RequiresCompatibilities:
+        - FARGATE
+      ExecutionRoleArn: !GetAtt TaskExecutionRole.Arn
+      ContainerDefinitions:
+        - Name: api
+          Image: !Ref ApiImage
+          Essential: true
+          PortMappings:
+            - ContainerPort: 3000
+              Protocol: tcp
+          Environment:
+            - Name: REDIS_URL                                              # ← 変更
+              Value: !Sub "redis://${RedisCluster.RedisEndpoint.Address}:6379"  # ← 変更
+            - Name: REDIS_HOST
+              Value: !GetAtt RedisCluster.RedisEndpoint.Address
+            - Name: REDIS_PORT
+              Value: "6379"
+            - Name: DB_HOST
+              Value: !GetAtt Database.Endpoint.Address
+            - Name: DB_PORT
+              Value: "5432"
+            - Name: DB_USER
+              Value: !Ref DBUser
+            - Name: DB_PASSWORD
+              Value: !Ref DBPassword
+            - Name: DB_NAME
+              Value: !Ref DBName
+            - Name: NODE_ENV
+              Value: production
+          HealthCheck:
+            Command:
+              - CMD-SHELL
+              - wget -qO- http://localhost:3000/health || exit 1
+            Interval: 30
+            Timeout: 5
+            Retries: 3
+            StartPeriod: 60
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref APILogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: api
+
+  WorkerTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    DependsOn:
+      - RedisCluster
+      - Database
+    Properties:
+      Family: ai-devops-lab-worker
+      Cpu: "256"
+      Memory: "512"
+      NetworkMode: awsvpc
+      RequiresCompatibilities:
+        - FARGATE
+      ExecutionRoleArn: !GetAtt TaskExecutionRole.Arn
+      ContainerDefinitions:
+        - Name: worker
+          Image: !Ref WorkerImage
+          Essential: true
+          Environment:
+            - Name: REDIS_URL                                              # ← 変更
+              Value: !Sub "redis://${RedisCluster.RedisEndpoint.Address}:6379"  # ← 変更
+            - Name: REDIS_HOST
+              Value: !GetAtt RedisCluster.RedisEndpoint.Address
+            - Name: REDIS_PORT
+              Value: "6379"
+            - Name: DB_HOST
+              Value: !GetAtt Database.Endpoint.Address
+            - Name: DB_PORT
+              Value: "5432"
+            - Name: DB_USER
+              Value: !Ref DBUser
+            - Name: DB_PASSWORD
+              Value: !Ref DBPassword
+            - Name: DB_NAME
+              Value: !Ref DBName
+            - Name: NODE_ENV
+              Value: production
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref WorkerLogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: worker
+
+  # ==================== ALB ====================
+  LoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: ai-devops-lab-alb
+      Scheme: internet-facing
+      Type: application
+      Subnets:
+        - !Ref PublicSubnetA
+        - !Ref PublicSubnetC
+      SecurityGroups:
+        - !Ref ALBSG
+      Tags:
+        - Key: Name
+          Value: ai-devops-lab-alb
+
+  TargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: ai-devops-lab-api-tg
+      VpcId: !Ref VpcId
+      Protocol: HTTP
+      Port: 3000
+      TargetType: ip
+      HealthCheckProtocol: HTTP
+      HealthCheckPath: /health
+      HealthCheckPort: traffic-port
+      HealthCheckIntervalSeconds: 30
+      HealthCheckTimeoutSeconds: 5
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 3
+      Matcher:
+        HttpCode: "200-399"
+      Tags:
+        - Key: Name
+          Value: ai-devops-lab-api-tg
+
+  Listener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref LoadBalancer
+      Port: 80
+      Protocol: HTTP
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref TargetGroup
+
+  # ==================== ECS Services ====================
+  APIService:
+    Type: AWS::ECS::Service
+    DependsOn:
+      - Listener
+      - RedisCluster
+      - Database
+    Properties:
+      ServiceName: ai-devops-lab-api
+      Cluster: !Ref ECSCluster
+      LaunchType: FARGATE
+      DesiredCount: 1
+      HealthCheckGracePeriodSeconds: 120
+      TaskDefinition: !Ref APITaskDefinition
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          Subnets:
+            - !Ref PublicSubnetA
+            - !Ref PublicSubnetC
+          SecurityGroups:
+            - !Ref ECSServiceSG
+          AssignPublicIp: ENABLED
+      LoadBalancers:
+        - ContainerName: api
+          ContainerPort: 3000
+          TargetGroupArn: !Ref TargetGroup
+
+  WorkerService:
+    Type: AWS::ECS::Service
+    DependsOn:
+      - RedisCluster
+      - Database
+    Properties:
+      ServiceName: ai-devops-lab-worker
+      Cluster: !Ref ECSCluster
+      LaunchType: FARGATE
+      DesiredCount: 1
+      TaskDefinition: !Ref WorkerTaskDefinition
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          Subnets:
+            - !Ref PublicSubnetA
+            - !Ref PublicSubnetC
+          SecurityGroups:
+            - !Ref ECSServiceSG
+          AssignPublicIp: ENABLED
+
+# ──────────────────────────────────────────────────────────
+# Outputs
+# ──────────────────────────────────────────────────────────
+Outputs:
+  ALBEndpoint:
+    Description: ALB URL (API endpoint)
+    Value: !Sub "http://${LoadBalancer.DNSName}"
+
+  RedisEndpoint:
+    Description: ElastiCache Redis endpoint
+    Value: !GetAtt RedisCluster.RedisEndpoint.Address
+
+  DBEndpoint:
+    Description: RDS PostgreSQL endpoint
+    Value: !GetAtt Database.Endpoint.Address
+
+  ECSClusterName:
+    Description: ECS Cluster name
+    Value: !Ref ECSCluster
+```
 ---
 
 ## 補足: ローカル ↔ AWS の対応確認
